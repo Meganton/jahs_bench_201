@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import warnings
 from functools import partial
 from pathlib import Path
 from typing import Union, Optional, Sequence, Tuple, Dict
@@ -26,6 +27,10 @@ from jahs_bench.surrogate import utils as surrogate_utils, config
 
 _log = logging.getLogger(__name__)
 ConfigType = Union[dict, ConfigSpace.Configuration]
+
+
+def _sklearn_unpickle_warning_category():
+    return getattr(sklearn.exceptions, "InconsistentVersionWarning", UserWarning)
 
 
 class XGBSurrogate:
@@ -535,14 +540,48 @@ class XGBSurrogate:
     def load(cls, outdir: Path) -> XGBSurrogate:
         """ Load a previously saved surrogate from disk and return it. """
 
-        params: dict = joblib.load(outdir / cls.__params_filename)
+        warning_category = _sklearn_unpickle_warning_category()
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r"Trying to unpickle estimator .* from version .*",
+                category=warning_category,
+            )
+            warnings.filterwarnings(
+                "ignore",
+                message=r"\[.*\] WARNING: .*If you are loading a serialized model .*",
+                category=UserWarning,
+            )
+            warnings.filterwarnings(
+                "ignore",
+                message=r"\[.*\] WARNING: .*Found JSON model saved before XGBoost 1\.6.*",
+                category=UserWarning,
+            )
+            params: dict = joblib.load(outdir / cls.__params_filename)
+
         surrogate = cls()
         for k, v in params.items():
             surrogate.__setattr__(k, v)
 
         if surrogate.trained_:
             label_headers: pd.Series = pd.read_pickle(outdir / cls.__headers_filename)
-            model = joblib.load(outdir / cls.__model_filename)
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=r"Trying to unpickle estimator .* from version .*",
+                    category=warning_category,
+                )
+                warnings.filterwarnings(
+                    "ignore",
+                    message=r"\[.*\] WARNING: .*If you are loading a serialized model .*",
+                    category=UserWarning,
+                )
+                warnings.filterwarnings(
+                    "ignore",
+                    message=r"\[.*\] WARNING: .*Found JSON model saved before XGBoost 1\.6.*",
+                    category=UserWarning,
+                )
+                model = joblib.load(outdir / cls.__model_filename)
             model = cls._patch_sklearn_compat(model)
 
             surrogate.label_headers = pd.Index(label_headers)
