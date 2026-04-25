@@ -38,7 +38,7 @@ dependencies = [
     "xgboost<3.1.0",
     "ConfigSpace>=0.4.0",
     "joblib>=1.2,<2",
-    "scikit-learn>=1.4,<2",
+    "scikit-learn<=1.2.0",
     "yacs>=0.1.8",
     "requests>=2.28.0,<3",
     "pyyaml>=6.0,<7",
