@@ -429,11 +429,94 @@ class XGBSurrogate:
 
         return scores
 
+    @staticmethod
+    def _patch_sklearn_compat(model):
+        if model is None:
+            return model
+
+        stack = [model]
+        seen = set()
+
+        while stack:
+            obj = stack.pop()
+            obj_id = id(obj)
+            if obj_id in seen:
+                continue
+            seen.add(obj_id)
+
+            if obj.__class__.__name__ == "OneHotEncoder":
+                if not hasattr(obj, "_infrequent_enabled"):
+                    min_frequency = getattr(obj, "min_frequency", None)
+                    max_categories = getattr(obj, "max_categories", None)
+                    handle_unknown = getattr(obj, "handle_unknown", None)
+                    obj._infrequent_enabled = (
+                        min_frequency is not None
+                        or max_categories is not None
+                        or handle_unknown == "infrequent_if_exist"
+                    )
+                if not hasattr(obj, "_n_features_outs") and hasattr(obj, "categories_"):
+                    n_features_outs = [len(categories) for categories in obj.categories_]
+                    drop_idx = getattr(obj, "drop_idx_", None)
+                    if drop_idx is not None:
+                        for index, dropped in enumerate(drop_idx):
+                            if dropped is not None and n_features_outs[index] > 0:
+                                n_features_outs[index] -= 1
+                    obj._n_features_outs = n_features_outs
+                if not hasattr(obj, "sparse_output"):
+                    obj.sparse_output = getattr(obj, "sparse", True)
+                if not hasattr(obj, "_drop_idx_after_grouping") and hasattr(obj, "drop_idx_"):
+                    obj._drop_idx_after_grouping = obj.drop_idx_
+                if not hasattr(obj, "_infrequent_indices") and hasattr(obj, "categories_"):
+                    obj._infrequent_indices = [None for _ in obj.categories_]
+                if not hasattr(obj, "_default_to_infrequent_mappings") and hasattr(obj, "categories_"):
+                    obj._default_to_infrequent_mappings = [None for _ in obj.categories_]
+
+            if obj.__class__.__name__ == "ColumnTransformer":
+                if not hasattr(obj, "_name_to_fitted_passthrough"):
+                    obj._name_to_fitted_passthrough = {}
+
+            if hasattr(obj, "steps"):
+                for _, step in getattr(obj, "steps", []):
+                    if step not in ("drop", "passthrough"):
+                        stack.append(step)
+
+            if hasattr(obj, "transformers"):
+                for _, transformer, _ in getattr(obj, "transformers", []):
+                    if transformer not in ("drop", "passthrough"):
+                        stack.append(transformer)
+
+            if hasattr(obj, "transformers_"):
+                for _, transformer, _ in getattr(obj, "transformers_", []):
+                    if transformer not in ("drop", "passthrough"):
+                        stack.append(transformer)
+
+            if hasattr(obj, "named_transformers_"):
+                for transformer in getattr(obj, "named_transformers_", {}).values():
+                    if transformer not in ("drop", "passthrough"):
+                        stack.append(transformer)
+
+            if hasattr(obj, "estimators_"):
+                for estimator in getattr(obj, "estimators_", []):
+                    stack.append(estimator)
+
+            if hasattr(obj, "estimator"):
+                estimator = getattr(obj, "estimator")
+                if estimator is not None and estimator not in ("drop", "passthrough"):
+                    stack.append(estimator)
+
+            if hasattr(obj, "regressor"):
+                regressor = getattr(obj, "regressor")
+                if regressor is not None and regressor not in ("drop", "passthrough"):
+                    stack.append(regressor)
+
+        return model
+
     def predict(self, features: pd.DataFrame) -> pd.DataFrame:
         """ Given some input data, generate model predictions. The input data will be
         properly encoded when this function is called. """
 
         features = features.loc[:, self.feature_headers]
+        self._patch_sklearn_compat(self.model)
         ypredict = self.model.predict(features)
         ypredict = pd.DataFrame(ypredict, columns=self.label_headers)
         return ypredict
@@ -460,6 +543,7 @@ class XGBSurrogate:
         if surrogate.trained_:
             label_headers: pd.Series = pd.read_pickle(outdir / cls.__headers_filename)
             model = joblib.load(outdir / cls.__model_filename)
+            model = cls._patch_sklearn_compat(model)
 
             surrogate.label_headers = pd.Index(label_headers)
             surrogate.model = model
